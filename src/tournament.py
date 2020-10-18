@@ -15,11 +15,6 @@ class TournamentCreationWizard(Wizard):
         self.data = {'organizer': person}
 
     async def on_message(self, ctx):
-        if ctx.content.startswith('!back'):
-            self.stage -= 1
-        elif ctx.content.startswith('!cancel'):
-            del self.cog.wizards[ctx.channel]
-
         if self.stage == 0:
             await self.person.send("Hi, I can help you start a tournament on Angel Arena. Since you are not in the list of trusted TOs, this tournament will need to be accepted by an administrator before it goes live.\n\nYou can always go back one step by saying `!back` or cancel the tournament creation entirely by saying `!cancel`.\n\n**Step 1**\nWhat's the name of the tournament?")
             self.stage += 1
@@ -50,7 +45,7 @@ class TournamentCreationWizard(Wizard):
             self.data['desc'] = ctx.content
 
             t = Tournament.create_from_data(self.data)
-            await self.person.send("The information you entered is:\n{0}\n\n If this is correct, answer `yes`. Otherwise use `!back` to go back and refill the information.".format(t.description()))
+            await self.person.send("The information you entered is:\n{0}\n\n If this is correct, answer `yes`.".format(t.description()))
             self.stage += 1
 
         elif self.stage == 5:
@@ -59,7 +54,8 @@ class TournamentCreationWizard(Wizard):
                 await self.person.send("Your tournament has been submitted. Good luck and have fun!")
                 del self.cog.wizards[ctx.channel]
             else:
-                await self.person.send("Response could not be parsed. If the above information is correct, answer `yes`. Otherwise use `!back` to go back and refill the information.")
+                await self.person.send("Cancelling tournament creation.")
+                del self.cog.wizards[ctx.channel]
         else:
             await self.person.send("This should not have happened... Please try again.")
             del self.cog.wizards[ctx.channel]
@@ -81,6 +77,9 @@ class Tournament(object):
         self.desc = desc
         self.format = format
         self.system = system
+        self.open_message = None
+        self.participants = []
+        self.message = None
 
     @staticmethod
     def create_from_data(data):
@@ -89,7 +88,10 @@ class Tournament(object):
     def description(self):
         lines = self.desc.split('\n')
         desc = '\n'.join(['> %s'%x for x in lines])
-        return "**Title:** {0.title}\n**Organizer:** {0.organizer.mention}\n**Format:** {0.format}\n**System:** {1}\nAdditional information:\n{2}".format(self, self.SYSTEMS[self.system], desc)
+        participants_text = ""
+        if len(self.participants) > 0:
+            participants_text = "\n**Participants:** " + ', '.join([p.mention for p in self.participants])
+        return "**Title:** {0.title}\n**Organizer:** {0.organizer.mention}\n**Format:** {0.format}\n**System:** {1}\nAdditional information:\n{2}{3}".format(self, self.SYSTEMS[self.system], desc, participants_text)
 
 class TournamentCog(commands.Cog):
     def __init__(self, bot, *args):
@@ -103,11 +105,41 @@ class TournamentCog(commands.Cog):
         if not self.announcement_channel:
             logging.error("Channel #announcements not found.")
 
+    async def init(self):
+        await self.initiate_open_tournament_channel()
+
+    async def initiate_open_tournament_channel(self):
+        ch = discord.utils.get(self.bot.get_all_channels(), guild__name='Angel Arena', name='open-tournaments')
+        self.open_tournament_channel = ch
+
+        # clear messages
+        async for message in ch.history(limit=200):
+            await message.delete()
+
+        if len(self.tournaments) == 0:
+            await ch.send("There are no open tournaments. You can register a new tournament by sending me a DM with `!register_tournament`.")
+        else:
+            await ch.send("There are {0} open tournaments. Register for them by reacting with an emoji of your choice!".format(len(self.tournaments)))
+
+    async def update_open_tournament_top_message(self):
+        m = (await self.open_tournament_channel.history(limit=1, oldest_first=True).flatten())[0]
+
+        if len(self.tournaments) == 0:
+            await m.edit(content="There are no open tournaments. You can register a new tournament by sending me a DM with `!register_tournament`.")
+        else:
+            await m.edit(content="There are {0} open tournaments. Register for them by reacting with an emoji of your choice!".format(len(self.tournaments)))
+
     async def add_tournament(self, t):
         self.tournaments.append(t)
         await self.announcement_channel.send("A new tournament was registered:\n{0}".format(t.description()))
+        t.message = await self.open_tournament_channel.send(t.description())
+        await self.update_open_tournament_top_message()
 
-    @commands.command(name='register_tournament', aliases=['tournament', 'leaderboards', 'points', 'score', 'highscore'])
+    @commands.command(name='update')
+    async def _update(self, ctx):
+        await self.update_open_tournament_top_message()
+
+    @commands.command(name='register_tournament', aliases=['new_tournament'])
     async def _register_tournament(self, ctx):
         dm_channel = await ctx.author.create_dm()
 
@@ -117,6 +149,38 @@ class TournamentCog(commands.Cog):
         if not isinstance(ctx.channel, discord.DMChannel):
             await self.wizards[dm_channel].on_message(ctx)
             await ctx.channel.send("{0}, I have sent you a DM!".format(ctx.author.mention))
+
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction, user):
+        t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
+
+        if not t:
+            logging.error("Could not find tournament connected to this message: %s", reaction.message.content)
+            return
+
+        t.participants.append(user)
+        await t.message.edit(content=t.description())
+        logging.info("%s joined tournament '%s'", user, t.title)
+
+    @commands.Cog.listener()
+    async def on_reaction_remove(self, reaction, user):
+        t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
+
+        if not t:
+            logging.error("Could not find tournament connected to this message: %s", reaction.message.content)
+            return
+
+        p = next(filter(lambda x: x.id == user.id, t.participants), None)
+
+        if not p:
+            logging.error("Could not find player %s in tournament '%s'", user, t.title)
+            return
+
+        t.participants.remove(p)
+
+        await t.message.edit(content=t.description())
+        logging.info("%s left tournament '%s'", user, t.title)
+
 
     @commands.Cog.listener()
     async def on_message(self, ctx):
@@ -129,6 +193,11 @@ class TournamentCog(commands.Cog):
             except:
                 logging.error("Wizard failed in channel %s. Removing wizard. Traceback: \n%s", ctx.channel, traceback.format_exc())
                 del self.wizards[ctx.channel]
+
+    @commands.command()
+    async def test(self, ctx):
+        t = Tournament("Test tournament", ctx.author, "Description", "Standard", "SSS")
+        await self.add_tournament(t)
 
 def setup(bot):
     cog = TournamentCog(bot)
