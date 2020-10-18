@@ -107,8 +107,9 @@ class TournamentCog(commands.Cog):
         self.bot = bot
         self.wizards = {}
         self.tournaments = []
+        self.guild = discord.utils.get(self.bot.guilds, name="Angel Arena")
 
-        self.announcement_channel = discord.utils.get(self.bot.get_all_channels(), guild__name='Angel Arena', name='announcements')
+        self.announcement_channel = discord.utils.get(self.bot.get_all_channels(), guild__name="Angel Arena", name='announcements')
         if not self.announcement_channel:
             logging.error("Channel #announcements not found.")
 
@@ -184,8 +185,31 @@ class TournamentCog(commands.Cog):
             t.approval = False
             await reaction.message.delete()
             self.tournaments.remove(t)
+            del t
+
+    async def prepare_tournament(self, t):
+        t.role = await self.guild.create_role(name=t.title, mentionable=True)
+        t.category = await self.guild.create_category(t.title, position=10000, overwrites = {
+            self.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            t.role: discord.PermissionOverwrite(read_messages=True)
+            })
+        t.lobby = await t.category.create_text_channel("Lobby")
+
+        for p in t.participants:
+            await p.add_roles(t.role)
+
+        await t.lobby.send("{0} Welcome in this tournament lobby. We're in the check-in phase until ... (I need to implement this). React to this message with any emoji to check-in to this tournament.".format(t.role.mention))
+
+    async def delete_tournament(self, t):
+        for ch in t.category.channels:
+            await ch.delete()
+        await t.category.delete()
+        await t.role.delete()
+        self.tournaments.remove(t)
+        del t
 
     @commands.command(name='update')
+    @commands.has_role('Oversight AI')
     async def _update(self, ctx):
         await self.update_open_tournament_top_message()
 
@@ -200,7 +224,42 @@ class TournamentCog(commands.Cog):
             await self.wizards[dm_channel].on_message(ctx)
             await ctx.channel.send("{0}, I have sent you a DM!".format(ctx.author.mention))
 
-    @commands.Cog.listener()
+    @commands.command(name='kickoff', aliases=['start'])
+    async def _kickoff(self, ctx, *args):
+        title = ' '.join(args)
+        if len(title) == 0:
+            await ctx.channel.send("No argument found. Usage: `!kickoff <tournament title>`")
+            return
+
+        t = next(filter(lambda x: x.title == title, self.tournaments), None)
+        if not t:
+            await ctx.channel.send("No tournament called `{0}` found.".format(title))
+            return
+
+        if not ctx.author.id == t.organizer:
+            await ctx.channel.send("You are not the TO for this tournament.")
+            return
+
+        await self.prepare_tournament(t)
+        await ctx.channel.send("Tournament lobby prepared. Good luck and have fun!")
+
+    @commands.command(name='abort', aliases=['delete'])
+    async def _abort(self, ctx, *args):
+        t = next(filter(lambda x: x.category == ctx.channel.category, self.tournaments), None)
+        if not t:
+            await ctx.channel.send("Use this command only in a tournament lobby.")
+            return
+
+        if not ctx.author.id == t.organizer:
+            await ctx.channel.send("You are not the TO for this tournament.")
+            return
+
+        if not ' '.join(args) == "I am really sure":
+            await ctx.channel.send("If you are really sure, that you want to abort this tournament, type `!abort I am really sure`.")
+            return
+
+        await self.delete_tournament(t)
+
     async def tournament_registration(self, reaction, user, add):
         t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
 
