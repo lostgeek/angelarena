@@ -82,6 +82,7 @@ class Tournament(object):
         self.open_message = None
         self.participants = []
         self.message = None
+        self.approval = False
 
     @staticmethod
     def create_from_data(data):
@@ -113,19 +114,34 @@ class TournamentCog(commands.Cog):
 
     async def init(self):
         await self.initiate_open_tournament_channel()
+        await self.initiate_approve_tournament_channel()
 
     async def initiate_open_tournament_channel(self):
         ch = discord.utils.get(self.bot.get_all_channels(), guild__name='Angel Arena', name='open-tournaments')
         self.open_tournament_channel = ch
 
+        if not ch:
+            logging.error("Channel #open-tournaments not found.")
+
         # clear messages
-        async for message in ch.history(limit=200):
-            await message.delete()
+        ms = await ch.history(limit=200).flatten()
+        await ch.delete_messages(ms)
 
         if len(self.tournaments) == 0:
             await ch.send("There are no open tournaments. You can register a new tournament by sending me a DM with `!register_tournament`.")
         else:
             await ch.send("There are {0} open tournaments. Register for them by reacting with an emoji of your choice!".format(len(self.tournaments)))
+
+    async def initiate_approve_tournament_channel(self):
+        ch = discord.utils.get(self.bot.get_all_channels(), guild__name='Angel Arena', name='approve-tournaments')
+        self.approve_tournament_channel = ch
+
+        if not ch:
+            logging.error("Channel #approve-tournaments not found.")
+
+        # clear messages
+        ms = await ch.history(limit=200).flatten()
+        await ch.delete_messages(ms)
 
     async def update_open_tournament_top_message(self):
         m = (await self.open_tournament_channel.history(limit=1, oldest_first=True).flatten())[0]
@@ -135,11 +151,39 @@ class TournamentCog(commands.Cog):
         else:
             await m.edit(content="There are {0} open tournaments. Register for them by reacting with an emoji of your choice!".format(len(self.tournaments)))
 
+    async def announce_tournament(self, t):
+        if not t.approval:
+            t.message = await self.approve_tournament_channel.send("A new tournament was registered:\n{0}".format(t.description()))
+        else:
+            await self.announcement_channel.send("A new tournament was registered:\n{0}".format(t.description()))
+            t.message = await self.open_tournament_channel.send(t.description())
+            await self.update_open_tournament_top_message()
+
     async def add_tournament(self, t):
+        # check if organizer is in the TO group
+        role = discord.utils.find(lambda r: r.name == 'Tournament Organizer', self.announcement_channel.guild.roles)
+        if next(filter(lambda x: x == role, t.organizer.roles), None):
+            t.approval = True
+        else:
+            t.approval = False
         self.tournaments.append(t)
-        await self.announcement_channel.send("A new tournament was registered:\n{0}".format(t.description()))
-        t.message = await self.open_tournament_channel.send(t.description())
-        await self.update_open_tournament_top_message()
+        await self.announce_tournament(t)
+
+    async def approve_tournament(self, reaction, user):
+        t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
+
+        if not t:
+            logging.error("Could not find approval-awaiting tournament connected to this message: %s", reaction.message.content)
+            return
+
+        if reaction.emoji == '👍':
+            t.approval = True
+            await reaction.message.delete()
+            await self.announce_tournament(t)
+        elif reaction.emoji == '👎':
+            t.approval = False
+            await reaction.message.delete()
+            self.tournaments.remove(t)
 
     @commands.command(name='update')
     async def _update(self, ctx):
@@ -157,19 +201,7 @@ class TournamentCog(commands.Cog):
             await ctx.channel.send("{0}, I have sent you a DM!".format(ctx.author.mention))
 
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction, user):
-        t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
-
-        if not t:
-            logging.error("Could not find tournament connected to this message: %s", reaction.message.content)
-            return
-
-        t.participants.append(user)
-        await t.message.edit(content=t.description())
-        logging.info("%s joined tournament '%s'", user, t)
-
-    @commands.Cog.listener()
-    async def on_reaction_remove(self, reaction, user):
+    async def tournament_registration(self, reaction, user, add):
         t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
 
         if not t:
@@ -178,15 +210,28 @@ class TournamentCog(commands.Cog):
 
         p = next(filter(lambda x: x.id == user.id, t.participants), None)
 
-        if not p:
-            logging.error("Could not find player %s in tournament '%s'", user, t)
-            return
+        if add and not p:
+            t.participants.append(user)
+            await t.message.edit(content=t.description())
+            logging.info("%s joined tournament '%s'", user, t)
 
-        t.participants.remove(p)
+        if not add and p:
+            t.participants.remove(p)
+            await t.message.edit(content=t.description())
+            logging.info("%s left tournament '%s'", user, t)
 
-        await t.message.edit(content=t.description())
-        logging.info("%s left tournament '%s'", user, t)
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction, user):
+        if reaction.message.channel == self.open_tournament_channel:
+            await self.tournament_registration(reaction, user, add=True)
 
+        if reaction.message.channel == self.approve_tournament_channel:
+            await self.approve_tournament(reaction, user)
+
+    @commands.Cog.listener()
+    async def on_reaction_remove(self, reaction, user):
+        if reaction.message.channel == self.open_tournament_channel:
+            await self.tournament_registration(reaction, user, add=False)
 
     @commands.Cog.listener()
     async def on_message(self, ctx):
