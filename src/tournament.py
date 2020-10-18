@@ -5,6 +5,7 @@ import discord
 import discord.utils
 from discord.ext import commands
 from wizard import *
+import uuid
 
 class TournamentCreationWizard(Wizard):
     def __init__(self, cog, person):
@@ -72,6 +73,7 @@ class Tournament(object):
             }
 
     def __init__(self, title, organizer, desc, format, system):
+        self.id = uuid.uuid4()
         self.title = title
         self.organizer = organizer
         self.desc = desc
@@ -90,8 +92,12 @@ class Tournament(object):
         desc = '\n'.join(['> %s'%x for x in lines])
         participants_text = ""
         if len(self.participants) > 0:
-            participants_text = "\n**Participants:** " + ', '.join([p.mention for p in self.participants])
+            participants_text = "\n**Participants ({0}):** {1}".format(len(self.participants), ', '.join([p.mention for p in self.participants]))
+
         return "**Title:** {0.title}\n**Organizer:** {0.organizer.mention}\n**Format:** {0.format}\n**System:** {1}\nAdditional information:\n{2}{3}".format(self, self.SYSTEMS[self.system], desc, participants_text)
+
+    def __str__(self):
+        return "{0.title} ({0.id})".format(self)
 
 class TournamentCog(commands.Cog):
     def __init__(self, bot, *args):
@@ -160,7 +166,7 @@ class TournamentCog(commands.Cog):
 
         t.participants.append(user)
         await t.message.edit(content=t.description())
-        logging.info("%s joined tournament '%s'", user, t.title)
+        logging.info("%s joined tournament '%s'", user, t)
 
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
@@ -173,13 +179,13 @@ class TournamentCog(commands.Cog):
         p = next(filter(lambda x: x.id == user.id, t.participants), None)
 
         if not p:
-            logging.error("Could not find player %s in tournament '%s'", user, t.title)
+            logging.error("Could not find player %s in tournament '%s'", user, t)
             return
 
         t.participants.remove(p)
 
         await t.message.edit(content=t.description())
-        logging.info("%s left tournament '%s'", user, t.title)
+        logging.info("%s left tournament '%s'", user, t)
 
 
     @commands.Cog.listener()
