@@ -20,13 +20,13 @@ bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"),
 @bot.event
 async def on_ready():
     logging.info('Bot ready. Loading tournament extension.')
-    bot.load_extension('tournament')
+    bot.load_extension('angelarena.cog')
     await bot.get_cog("TournamentCog").init()
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def reload(ctx):
-    bot.reload_extension('tournament')
+    bot.reload_extension('angelarena.cog')
     await bot.get_cog("TournamentCog").init()
     await ctx.channel.send('I feel renewed!')
 
