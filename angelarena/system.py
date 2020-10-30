@@ -176,3 +176,20 @@ class SSSSystem(System):
 
 
         self.rounds.append(round)
+
+    def finish_round(self):
+        round = self.rounds[-1]
+
+        if next(filter(lambda match: match.result == SSSResults.open, round), None):
+            raise Exception("Tried to finish round with open results.")
+
+        for match in round:
+            if match.result == SSSResults.win_corp:
+                match.runner.losses += 1
+            elif match.result == SSSResults.win_runner:
+                match.corp.losses += 1
+            elif match.result == SSSResults.draw:
+                match.corp.losses += 1
+                match.runner.losses += 1
+            else:
+                raise Exception("Tried to finish round with open results. This should not have happened, leaving round in a broken state!")
