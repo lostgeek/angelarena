@@ -10,8 +10,12 @@ import redis
 redis_server = redis.Redis()
 AUTH_TOKEN = str(redis_server.get('DISCORD_AUTH_TOKEN').decode('utf-8'))
 
+intents = discord.Intents.default()
+intents.members = True
+
 bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"),
-                   description='Angel Arena Bot')
+                   description='Angel Arena Bot',
+                   intents=intents)
 
 @bot.event
 async def on_ready():

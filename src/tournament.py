@@ -1,11 +1,13 @@
 import logging
 import traceback
+import uuid
 
 import discord
 import discord.utils
 from discord.ext import commands
+
 from wizard import *
-import uuid
+from handler import *
 
 class TournamentCreationWizard(Wizard):
     def __init__(self, cog, person):
@@ -83,6 +85,7 @@ class Tournament(object):
         self.participants = []
         self.message = None
         self.approval = False
+        self.handler = None
 
     @staticmethod
     def create_from_data(data):
@@ -170,20 +173,23 @@ class TournamentCog(commands.Cog):
         self.tournaments.append(t)
         await self.announce_tournament(t)
 
-    async def approve_tournament(self, reaction, user):
-        t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
+    async def approve_tournament(self, message_id, user_id, emoji):
+        t = next(filter(lambda x: x.message.id == message_id, self.tournaments), None)
 
         if not t:
-            logging.error("Could not find approval-awaiting tournament connected to this message: %s", reaction.message.content)
+            logging.error(f"Could not find approval-awaiting tournament connected to this message: {message_id}")
             return
 
-        if reaction.emoji == '👍':
+        user = self.guild.get_member(user_id)
+        message = await self.approve_tournament_channel.fetch_message(message_id)
+
+        if emoji.name == '👍':
             t.approval = True
-            await reaction.message.delete()
+            await message.delete()
             await self.announce_tournament(t)
-        elif reaction.emoji == '👎':
+        elif emoji.name == '👎':
             t.approval = False
-            await reaction.message.delete()
+            await message.delete()
             self.tournaments.remove(t)
             del t
 
@@ -260,14 +266,15 @@ class TournamentCog(commands.Cog):
 
         await self.delete_tournament(t)
 
-    async def tournament_registration(self, reaction, user, add):
-        t = next(filter(lambda x: x.message.id == reaction.message.id, self.tournaments), None)
+    async def tournament_registration(self, message_id, user_id, emoji, add=True):
+        t = next(filter(lambda x: x.message.id == message_id, self.tournaments), None)
 
         if not t:
-            logging.error("Could not find tournament connected to this message: %s", reaction.message.content)
+            logging.error(f"Could not find tournament connected to this message: {message_id}")
             return
 
-        p = next(filter(lambda x: x.id == user.id, t.participants), None)
+        p = next(filter(lambda x: x.id == user_id, t.participants), None)
+        user = self.guild.get_member(user_id)
 
         if add and not p:
             t.participants.append(user)
@@ -280,17 +287,17 @@ class TournamentCog(commands.Cog):
             logging.info("%s left tournament '%s'", user, t)
 
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction, user):
-        if reaction.message.channel == self.open_tournament_channel:
-            await self.tournament_registration(reaction, user, add=True)
+    async def on_raw_reaction_add(self, payload):
+        if payload.channel_id == self.open_tournament_channel.id:
+            await self.tournament_registration(payload.message_id, payload.user_id, payload.emoji, add=True)
 
-        if reaction.message.channel == self.approve_tournament_channel:
-            await self.approve_tournament(reaction, user)
+        if payload.channel_id == self.approve_tournament_channel.id:
+            await self.approve_tournament(payload.message_id, payload.user_id, payload.emoji)
 
     @commands.Cog.listener()
-    async def on_reaction_remove(self, reaction, user):
-        if reaction.message.channel == self.open_tournament_channel:
-            await self.tournament_registration(reaction, user, add=False)
+    async def on_raw_reaction_remove(self, payload):
+        if payload.channel_id == self.open_tournament_channel.id:
+            await self.tournament_registration(payload.message_id, payload.user_id, payload.emoji, add=False)
 
     @commands.Cog.listener()
     async def on_message(self, ctx):
