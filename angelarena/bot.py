@@ -27,6 +27,7 @@ async def on_ready():
 @commands.has_permissions(administrator=True)
 async def reload(ctx):
     bot.reload_extension('angelarena.cog')
+    bot.get_cog("TournamentCog").load()
     await bot.get_cog("TournamentCog").init()
     await ctx.channel.send('I feel renewed!')
 

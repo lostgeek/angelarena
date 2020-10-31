@@ -2,16 +2,21 @@ import logging
 
 import uuid
 
-from angelarena.wizard import *
-from angelarena.handler import *
+from angelarena import wizard, system
 
-class TournamentCreationWizard(Wizard):
+SYSTEMS = {\
+        'SSS': 'Single Sided Swiss',\
+        #  'DSS': 'Double Sided Swiss (no cut)',\
+        #  'DSS+Cut': 'Double Sided Swiss with a top cut',\
+        }
+
+class TournamentCreationWizard(wizard.DMWizard):
     def __init__(self, cog, person):
         self.cog = cog
         self.person = person
         self.stage = 0
 
-        self.data = {'organizer': person}
+        self.data = {'organizer': person.id}
 
     async def on_message(self, ctx):
         if self.stage == 0:
@@ -27,17 +32,17 @@ class TournamentCreationWizard(Wizard):
         elif self.stage == 2:
             self.data['format'] = ctx.content
 
-            options = '\n'.join(["> `{0}` - {1}".format(k,v) for k,v in Tournament.SYSTEMS.items()])
+            options = '\n'.join(["> `{0}` - {1}".format(k,v) for k,v in SYSTEMS.items()])
             await self.person.send("Tournament format is:\n> {0[format]}\n\n**Step 3**\nWhat is the tournament system? Number of rounds will be determined by the number of participants and can be adjusted prior to the tournament start.\nOptions are:\n{1}".format(self.data, options))
             self.stage += 1
 
         elif self.stage == 3:
-            if not ctx.content in Tournament.SYSTEMS:
+            if not ctx.content in SYSTEMS:
                 await self.person.send("Answer not recognized. Your options are:\n `SSS` - Single Sided Swiss\n`DSS` - Double Sided Swiss\n`DSS+Cut` - Double Sided Swiss + Top Cut")
             else:
                 self.data['system'] = ctx.content
 
-                await self.person.send("Tournament system is:\n> {1}\n\n**Step 4**\nPlease give us some additional information about your tournament.".format(self.data, Tournament.SYSTEMS[self.data['system']]))
+                await self.person.send("Tournament system is:\n> {1}\n\n**Step 4**\nPlease give us some additional information about your tournament.".format(self.data, SYSTEMS[self.data['system']]))
                 self.stage += 1
 
         elif self.stage == 4:
@@ -60,43 +65,64 @@ class TournamentCreationWizard(Wizard):
             del self.cog.wizards[ctx.channel]
 
     async def create_tournament(self):
-        t = Tournament.create_from_data(self.data)
+        if self.data['system'] == 'SSS':
+            t = SSSTournament.create_from_data(self.data)
         await self.cog.add_tournament(t)
 
-class Tournament(object):
-    SYSTEMS = {\
-            'SSS': 'Single Sided Swiss',\
-            'DSS': 'Double Sided Swiss (no cut)',\
-            'DSS+Cut': 'Double Sided Swiss with a top cut',\
-            }
+class TournamentCheckInWizard(wizard.DMWizard):
+    def __init__(self, cog, tournament, person):
+        self.cog = cog
+        self.tournament = tournament
+        self.person = person
 
-    def __init__(self, title, organizer, desc, format, system):
+        self.corp_deck = None
+        self.runner_deck = None
+        self.stage = 0
+
+    async def on_message(self, ctx):
+        if self.stage == 0:
+            await self.person.send(f"Welcome to {self.tournament.title}! Please check in by sending me both your Runner and Corp decklist in the form of a NetrunnerDB link.")
+            self.stage += 1
+        elif self.stage == 1:
+            await self.person.send(f"Doing stuff")
+        else:
+            await self.person.send("This should not have happened... resetting!")
+            self.corp_deck = None
+            self.runner_deck = None
+            self.stage = 0
+            await self.on_message(ctx)
+
+class Tournament(object):
+    system_text = "Undefined system"
+
+    def __init__(self, title, organizer_id, desc, format):
         self.id = uuid.uuid4()
         self.title = title
-        self.organizer = organizer
+        self.organizer_id = organizer_id
         self.desc = desc
         self.format = format
-        self.system = system
-        self.open_message = None
+
+        self.message_id = None
         self.participants = []
-        self.message = None
         self.approval = False
-        self.handler = None
+        self.running = False
+
+        self.category_id = None
+        self.lobby_id = None
+        self.results_id = None
+        self.check_in_id = None
+        self.bot_commands_id = None
 
     @staticmethod
     def create_from_data(data):
-        return Tournament(data['title'], data['organizer'], data['desc'], data['format'], data['system'])
-
-    def description(self):
-        lines = self.desc.split('\n')
-        desc = '\n'.join(['> %s'%x for x in lines])
-        participants_text = ""
-        if len(self.participants) > 0:
-            participants_text = "\n**Participants ({0}):** {1}".format(len(self.participants), ', '.join([p.mention for p in self.participants]))
-
-        return "**Title:** {0.title}\n**Organizer:** {0.organizer.mention}\n**Format:** {0.format}\n**System:** {1}\nAdditional information:\n{2}{3}".format(self, self.SYSTEMS[self.system], desc, participants_text)
+        return Tournament(data['title'], data['organizer'], data['desc'], data['format'])
 
     def __str__(self):
         return "{0.title} ({0.id})".format(self)
 
+class SSSTournament(Tournament):
+    system_text = "Single Sided Swiss"
 
+    def __init__(self, title, organizer_id, desc, format):
+        super().__init__(title, organizer_id, desc, format)
+        self.system = system.SSSSystem(3, None)
